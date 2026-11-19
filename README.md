@@ -2,6 +2,20 @@
 
 [English](README.md) | [Русский](README.ru.md)
 
+**Your AI can pick up work from Telegram before you open the chat.**
+
+Connect your work Telegram account to an AI assistant that can keep an eye on conversations, flag what needs you, and start the work you've authorized in advance. You get the result and a link to the original message, without having to turn every message into a task yourself.
+
+## From a bug report in Telegram to a fix on GitHub
+
+A client sent me a screen recording of a bug in an app I was building. I didn't have to spot the message, forward the video, or write a ticket. My OpenAI assistant picked it up from my work Telegram and handed it to a coding agent. By the time I checked in, I had a summary of what changed and links to the commits on GitHub.
+
+The same setup can flag a changed deadline, pull together the context for a client request, or draft a reply in the right conversation. With sending enabled, your assistant can also reply from your own account under the rules you set in your client.
+
+**What you need:** This self-hosted MCP gives a compatible assistant access to Telegram messages, attachments, and supported events. The assistant decides what to flag and what work to start. The bug-fix workflow also needs a coding agent with access to the relevant repository. Background push currently requires a configured OpenAI/ChatGPT callback; other compatible clients can pull events. No coding or GitHub access is granted by installing the MCP itself.
+
+[Jump to the copy-paste setup prompt](#copy-this-prompt-into-your-ai-agent)
+
 ## Copy this prompt into your AI agent
 
 An agent with terminal tools can handle the technical setup. You answer simple questions and complete private sign-in steps yourself. Without tools, the agent can only guide you.

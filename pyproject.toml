@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "telegram-personal-mcp"
 version = "0.1.0"
-description = "Self-hosted Telegram MCP with message search, replies and durable events"
+description = "Connect your work Telegram to an AI assistant that can flag what matters and start the work you authorize."
 requires-python = ">=3.11"
 license = "MIT"
 readme = "README.md"
