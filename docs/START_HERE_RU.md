@@ -1,6 +1,8 @@
 # Telegram MCP: инструкция с нуля
 
-[Готовый промпт для ИИ-помощника](AGENT_SETUP_PROMPT_RU.md) · [README](../README.md)
+[English](START_HERE_EN.md) | [Русский](START_HERE_RU.md)
+
+[Готовый промпт для ИИ-помощника](AGENT_SETUP_PROMPT_RU.md) · [README](../README.ru.md)
 
 ## Что вы получите
 
