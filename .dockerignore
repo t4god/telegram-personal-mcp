@@ -1,0 +1,7 @@
+.git
+.env
+runtime
+**/*.session*
+**/*.db*
+**/__pycache__
+.venv
