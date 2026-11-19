@@ -9,7 +9,7 @@ from telethon import TelegramClient
 
 async def setup():
     os.umask(0o077)
-    root = Path(os.environ.get("DOT_ROOT", "./runtime"))
+    root = Path(os.environ.get("DOT_ROOT", "./runtime")).expanduser().resolve()
     folder = root / "telegram-session"
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     if (folder / "work.session").exists():

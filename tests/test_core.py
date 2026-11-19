@@ -127,3 +127,12 @@ async def test_setup_never_overwrites_session(tmp_path,monkeypatch):
     (folder/'work.session').write_text('fake fixture')
     with pytest.raises(SystemExit): await setup.setup()
     assert (folder/'work.session').read_text()=='fake fixture'
+
+@pytest.mark.asyncio
+async def test_setup_expands_home_before_session_check(tmp_path,monkeypatch):
+    from telegram_dot import setup
+    monkeypatch.setenv('HOME',str(tmp_path))
+    monkeypatch.setenv('DOT_ROOT','~/private-runtime')
+    folder=tmp_path/'private-runtime/telegram-session';folder.mkdir(parents=True)
+    (folder/'work.session').write_text('fake fixture')
+    with pytest.raises(SystemExit,match='Session already exists'): await setup.setup()
