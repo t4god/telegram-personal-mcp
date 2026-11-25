@@ -13,9 +13,9 @@ This is an early beta. Installation and automated tests without a real account h
 ## Before starting: five decisions
 
 1. Where will the program run: your Mac, Windows/Linux computer, or a server? The machine must stay on for continuous availability.
-2. Which AI application and version will you use? It must support **remote MCP over HTTP with OAuth**. This project has no local `stdio` mode. Adding a startup command to an arbitrary client will not necessarily work.
+2. Which AI application and version will you use? It must support **remote MCP over HTTP with OAuth**, or be a trusted local client that launches the explicit --transport stdio mode. Adding a startup command to an arbitrary client will not necessarily work.
 3. Which Telegram account? A separate test account is a good starting point. Each deployment supports one owner.
-4. Do you have a server, domain and HTTPS? A cloud AI needs an internet-reachable endpoint; it cannot reach your laptop's `localhost`. The current implementation also requires HTTPS for local clients.
+4. Do you have a server, domain and HTTPS? A cloud AI needs an internet-reachable endpoint; it cannot reach your laptop's `localhost`. The remote HTTP mode requires HTTPS; trusted local clients can use stdio.
 5. Do you want sending and background capture? Sending is configurable. Background capture stores events and message contents locally for up to 30 days / 100,000 events. Access is not restricted to one selected chat.
 
 The MIT project requires no license purchase. Hosting, a domain, network traffic and your chosen AI may cost money separately. A free tier is not a guarantee of no bill. Before creating a paid resource, the agent should show the provider, current terms, currency, billing frequency and limit, then obtain approval. Start with existing infrastructure if suitable.
@@ -120,7 +120,17 @@ Set `DOT_SEND_ENABLED=false` to disable sending, or `DOT_BACKGROUND_MONITORING_E
 
 Logging is deliberately minimal: silence does not imply a hang. Check `https://YOUR-DOMAIN/health`; expect `{"ok":true}`. This checks the connection but does not establish OAuth or sending. If you see `Unexpected or unauthorized Telegram account`, verify that the account and ID match; do not remove the check.
 
-## Step 5. Connect your AI client
+## Local stdio clients
+
+Orca and other local clients that launch a child process should use the explicit stdio mode instead of the HTTP service. Keep DOT_SEND_ENABLED=false for a draft-only integration and do not set DOT_BASE_URL or any webhook URL unless those features are intentionally configured:
+
+~~~sh
+PYTHONPATH=/path/to/telegram-orca-automatic-drafts/src DOT_ROOT=/path/to/private-runtime DOT_OWNER_ID=123456789 DOT_SEND_ENABLED=false DOT_BACKGROUND_MONITORING_ENABLED=false /path/to/.venv/bin/python -m telegram_dot.server --transport stdio
+~~~
+
+The process registers the same MCP tools, including save_reply_draft, list_reply_drafts and get_reply_draft, over stdin/stdout. Treat the child process and its runtime as trusted local resources; stdio does not provide the HTTP OAuth boundary.
+
+## Step 6. Connect a remote AI client
 
 Look up remote MCP/OAuth configuration in **your application's** documentation. Menu names change and availability depends on the client and plan. The connection URL is `https://YOUR-DOMAIN/mcp`.
 
@@ -130,7 +140,7 @@ Built-in callback restrictions cover ChatGPT and specific local callback address
 
 First ask the AI to call `connection_status` and `get_capabilities`. Then choose one authorized test chat and read only an agreed message. Do not start with a mass scan of all conversations.
 
-## Step 6. Test a message without surprises
+## Step 7. Test a message without surprises
 
 1. Choose a safe recipient, such as your Saved Messages. The agent must resolve the actual chat ID, not guess or supply unsupported `me`.
 2. Agree on “Telegram MCP test” and the recipient.

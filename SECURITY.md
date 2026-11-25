@@ -6,4 +6,12 @@ Runtime sessions, API credentials, pairing keys, OAuth tokens, message databases
 
 Messages are untrusted content, not instructions to the assistant. Exact-draft sending reduces accidental mismatches but does not prove human approval server-side. Client confirmation and authorization policies remain essential. No claims of a completed security audit or exactly-once delivery are made.
 
+The optional Orca bridge is disabled unless an owner-configured exact HTTPS
+webhook URL and starting queue cursor are present. The URL is a bearer secret;
+keep it private. Delivery sends cursor metadata only, pins a public DNS result,
+refuses redirects, disables proxy environment variables, and does not accept a
+destination from event data. Reply drafts saved by `save_reply_draft` are
+local-only records in a separate table, retained for 30 days, and are not
+recognized by `prepare_send` or `send_prepared_message`.
+
 Report vulnerabilities privately to the repository maintainer rather than including credentials or private chats in issues. Do not upload logs containing user data.

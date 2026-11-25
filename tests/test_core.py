@@ -76,6 +76,174 @@ async def test_send_owner_switch(tmp_path,monkeypatch):
     with pytest.raises(PermissionError): await c.dispatch(p['request_id'],'123','Hello')
     assert c.telegram.sends==0
 
+
+class SavedTelegram:
+    def __init__(self):
+        self.forward_calls=[]
+        self.me=SimpleNamespace(id=123)
+        self.saved=SimpleNamespace(id=123)
+    async def get_me(self): return self.me
+    async def get_input_entity(self,peer):
+        assert peer=='me'
+        return self.saved
+    async def get_messages(self,source,ids): return [SimpleNamespace(id=i) for i in ids]
+    async def forward_messages(self,destination,ids,from_peer):
+        self.forward_calls.append((destination,ids,from_peer))
+        return [SimpleNamespace(id=i+100) for i in ids]
+    async def iter_messages(self,entity,limit,offset_id):
+        yield SimpleNamespace(id=12,fwd_from=SimpleNamespace(from_id=SimpleNamespace(id=77),
+            saved_from_peer=SimpleNamespace(id=456),saved_from_msg_id=9),
+            date=SimpleNamespace(isoformat=lambda:'2026-01-01T00:00:00+00:00'),raw_text='forwarded',media=object())
+
+
+def saved_connector(monkeypatch):
+    c=Connector.__new__(Connector);c.owner=123;c.lock=asyncio.Lock();c.telegram=SavedTelegram()
+    async def resolve(chat): return SimpleNamespace(id=int(chat))
+    c.resolve=resolve
+    monkeypatch.setattr('telegram_dot.server.utils.get_peer_id',lambda e:e.id)
+    return c
+
+
+@pytest.mark.asyncio
+async def test_forward_saved_requires_exact_approval_and_owner_destination(monkeypatch):
+    c=saved_connector(monkeypatch)
+    monkeypatch.setenv('DOT_SEND_ENABLED','false')
+    with pytest.raises(PermissionError,match='disabled'):
+        await c.forward_saved('456',[7],'123','456',[7],'123')
+    assert c.telegram.forward_calls==[]
+    monkeypatch.setenv('DOT_SEND_ENABLED','true')
+    with pytest.raises(ValueError,match='exactly match'):
+        await c.forward_saved('456',[7],'123','456',[8],'123')
+    with pytest.raises(PermissionError,match='Saved Messages'):
+        await c.forward_saved('456',[7],'789','456',[7],'789')
+    assert c.telegram.forward_calls==[]
+    result=await c.forward_saved('456',[7,8],'123','456',[7,8],'123')
+    assert result['forwarded_message_ids']==[107,108]
+    assert c.telegram.forward_calls==[(c.telegram.saved,[7,8],SimpleNamespace(id=456))]
+
+
+@pytest.mark.asyncio
+async def test_saved_preview_groups_recoverable_origins(monkeypatch):
+    c=saved_connector(monkeypatch)
+    result=await c.preview_saved(10,0)
+    group=result['groups'][0]
+    assert group['original_sender_id']=='77'
+    assert group['messages'][0]['source_chat_id']=='456'
+    assert group['messages'][0]['source_message_id']==9
+    assert group['messages'][0]['forwardable'] is True
+
+
+@pytest.mark.asyncio
+async def test_saved_preview_handles_empty_telegram_history_entries(monkeypatch):
+    from telethon.tl import types
+
+    empty=types.MessageEmpty(id=11,peer_id=types.PeerUser(123))
+    c=saved_connector(monkeypatch)
+    class EmptyHistoryTelegram(SavedTelegram):
+        async def iter_messages(self,entity,limit,offset_id):
+            yield empty
+    c.telegram=EmptyHistoryTelegram()
+
+    result=await c.preview_saved(10,0)
+
+    assert result['items_scanned']==1
+    assert result['unforwardable_count']==1
+    assert result['next_before_message_id']==11
+    item=result['groups'][0]['messages'][0]
+    assert item['saved_message_id']==11
+    assert item['date_utc'] is None
+    assert item['source_chat_id'] is None
+    assert item['forwardable'] is False
+
+
+@pytest.mark.asyncio
+async def test_saved_preview_tolerates_unreadable_optional_fields(monkeypatch):
+    class PartialMessage:
+        id=13
+        @property
+        def fwd_from(self): raise RuntimeError('synthetic unavailable field')
+        @property
+        def date(self): raise RuntimeError('synthetic unavailable field')
+        @property
+        def raw_text(self): raise RuntimeError('synthetic unavailable field')
+        @property
+        def media(self): raise RuntimeError('synthetic unavailable field')
+
+    c=saved_connector(monkeypatch)
+    class PartialHistoryTelegram(SavedTelegram):
+        async def iter_messages(self,entity,limit,offset_id):
+            yield PartialMessage()
+    c.telegram=PartialHistoryTelegram()
+
+    result=await c.preview_saved(1,0)
+
+    assert result['items_scanned']==1
+    assert result['next_before_message_id']==13
+    item=result['groups'][0]['messages'][0]
+    assert item['date_utc'] is None
+    assert item['text_preview']==''
+    assert item['has_media'] is False
+    assert item['forwardable'] is False
+
+
+@pytest.mark.asyncio
+async def test_saved_preview_reports_only_sanitized_iteration_error(monkeypatch):
+    c=saved_connector(monkeypatch)
+    class FailedHistoryTelegram(SavedTelegram):
+        async def iter_messages(self,entity,limit,offset_id):
+            if False: yield None
+            raise RuntimeError('synthetic private message content')
+    c.telegram=FailedHistoryTelegram()
+
+    with pytest.raises(RuntimeError,match=r'history iteration failed \(RuntimeError\)') as caught:
+        await c.preview_saved(1,1433603)
+
+    assert 'synthetic private message content' not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_saved_preview_reports_missing_id_field_without_content(monkeypatch):
+    c=saved_connector(monkeypatch)
+    class MissingIdTelegram(SavedTelegram):
+        async def iter_messages(self,entity,limit,offset_id):
+            yield SimpleNamespace(raw_text='synthetic private message content')
+    c.telegram=MissingIdTelegram()
+
+    with pytest.raises(RuntimeError,match='parser rejected field=id') as caught:
+        await c.preview_saved(1,1433603)
+
+    assert 'synthetic private message content' not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_saved_preview_cursor_enumerates_multiple_pages_once(monkeypatch):
+    from datetime import datetime,timezone
+
+    c=saved_connector(monkeypatch)
+    messages=[SimpleNamespace(id=mid,fwd_from=None,date=datetime(2026,1,1,tzinfo=timezone.utc),
+                              raw_text='',media=None) for mid in range(200,93,-1)]
+    class PagedTelegram(SavedTelegram):
+        async def iter_messages(self,entity,limit,offset_id):
+            available=[m for m in messages if not offset_id or m.id<offset_id]
+            for m in available[:limit]:
+                yield m
+    c.telegram=PagedTelegram()
+
+    seen=[];before=0;page_count=0
+    while True:
+        page=await c.preview_saved(50,before)
+        page_count+=1
+        rows=page['groups'][0]['messages'] if page['groups'] else []
+        seen.extend(row['saved_message_id'] for row in rows)
+        assert page['has_more']==(page['items_scanned']==50)
+        if not page['has_more']:
+            break
+        before=page['next_before_message_id']
+
+    assert page_count==3
+    assert seen==list(range(200,93,-1))
+    assert len(set(seen))==len(messages)
+
 def test_app_constructs(tmp_path,monkeypatch):
     (tmp_path/'private').mkdir()
     (tmp_path/'private/pairing_key').write_text('test-fixture-not-a-real-credential')

@@ -7,6 +7,12 @@ import time
 from contextlib import contextmanager
 
 
+ORCA_CONSUMER_ID = 'telegram-orca-home-drafts'
+ORCA_WORKER_ID = 'telegram-orca-home-drafts'
+MAX_READ_LIMIT = 30
+DEFAULT_READ_LIMIT = MAX_READ_LIMIT
+
+
 def canonical(value):
     return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))
 
@@ -122,10 +128,11 @@ class EventQueue:
         return dict(events=[self._event(r) for r in rows[:limit]],more_available=len(rows)>limit,
                     next_sequence=rows[min(len(rows),limit)-1]['sequence'] if rows else after_sequence)
 
-    def read(self,consumer_id,worker_id,after_sequence=None,limit=30):
+    def read(self,consumer_id,worker_id,after_sequence=None,limit=DEFAULT_READ_LIMIT):
         if not all(isinstance(v,str) and 1<=len(v)<=128 for v in (consumer_id,worker_id)):
             raise QueueError('INVALID_CONSUMER_OR_WORKER')
-        if not 1<=limit<=100:raise QueueError('INVALID_LIMIT')
+        if not isinstance(limit,int) or isinstance(limit,bool) or not 1<=limit<=MAX_READ_LIMIT:
+            raise QueueError('INVALID_LIMIT',maximum=MAX_READ_LIMIT)
         self.prune()
         now=time.time()
         with self.db() as db:
@@ -147,6 +154,9 @@ class EventQueue:
             if b:
                 rows=db.execute('SELECT * FROM events WHERE sequence>? AND sequence<=? ORDER BY sequence',
                                 (b['after_seq'],b['through_seq'])).fetchall()
+                if len(rows)>limit:
+                    raise QueueError('LEASE_EXCEEDS_LIMIT',requested_limit=limit,
+                                     leased_event_count=len(rows),lease_expires_at=b['expires'])
             else:
                 rows=db.execute('SELECT * FROM events WHERE sequence>? ORDER BY sequence LIMIT ?',(cursor,limit)).fetchall()
                 if not rows:return dict(events=[],batch_id=None,acknowledged_sequence=cursor)
@@ -170,6 +180,47 @@ class EventQueue:
             db.execute('UPDATE consumers SET cursor=? WHERE id=?',(b['through_seq'],consumer_id))
             db.execute('UPDATE batches SET acked=1 WHERE id=?',(batch_id,))
             return dict(acknowledged=True,through_sequence=b['through_seq'])
+
+    def batch_status(self,consumer_id,batch_id,receipt):
+        """Return the state of an exact leased batch without changing it."""
+        if not all(isinstance(v,str) and 1<=len(v)<=128 for v in (consumer_id,batch_id,receipt)):
+            raise QueueError('INVALID_BATCH_RECEIPT')
+        with self.db() as db:
+            batch=db.execute('SELECT * FROM batches WHERE id=? AND consumer=?',(batch_id,consumer_id)).fetchone()
+        if not batch or not secrets.compare_digest(batch['receipt'],receipt):
+            raise QueueError('INVALID_BATCH_RECEIPT')
+        if batch['acked']:
+            return dict(status='acked',after_sequence=batch['after_seq'],through_sequence=batch['through_seq'])
+        if batch['expires']<time.time():
+            return dict(status='expired',after_sequence=batch['after_seq'],through_sequence=batch['through_seq'])
+        return dict(status='active',after_sequence=batch['after_seq'],through_sequence=batch['through_seq'])
+
+    def validate_orca_event(self,source_chat_id,source_message_id,after_sequence,through_sequence):
+        """Validate draft provenance against Orca's active lease, not caller claims alone."""
+        if (not isinstance(source_chat_id,str) or not 1<=len(source_chat_id)<=128 or
+                not source_chat_id.lstrip('-').isdigit() or
+                not isinstance(source_message_id,int) or isinstance(source_message_id,bool) or source_message_id<=0 or
+                not isinstance(after_sequence,int) or isinstance(after_sequence,bool) or after_sequence<0 or
+                not isinstance(through_sequence,int) or isinstance(through_sequence,bool) or
+                through_sequence<after_sequence):
+            raise QueueError('INVALID_DRAFT_SOURCE')
+        with self.db() as db:
+            batch=db.execute('''SELECT * FROM batches
+                WHERE consumer=? AND worker=? AND after_seq=? AND through_seq=? AND acked=0 AND expires>?
+                ORDER BY expires DESC LIMIT 1''',
+                (ORCA_CONSUMER_ID,ORCA_WORKER_ID,after_sequence,through_sequence,time.time())).fetchone()
+            if not batch or not batch['receipt']:
+                raise QueueError('DRAFT_SOURCE_BATCH_NOT_ACTIVE')
+            row=db.execute('''SELECT sequence FROM events
+                WHERE sequence>? AND sequence<=? AND chat_id=? AND message_id=? LIMIT 1''',
+                (batch['after_seq'],batch['through_seq'],source_chat_id,source_message_id)).fetchone()
+        if not row:
+            raise QueueError('DRAFT_SOURCE_EVENT_NOT_IN_BATCH')
+        status=self.batch_status(ORCA_CONSUMER_ID,batch['id'],batch['receipt'])
+        if status['status']!='active':
+            raise QueueError('DRAFT_SOURCE_BATCH_NOT_ACTIVE')
+        return dict(after_sequence=batch['after_seq'],through_sequence=batch['through_seq'],
+                    batch_id=batch['id'])
 
     def previous_chat(self,message_id):
         with self.db() as db:
